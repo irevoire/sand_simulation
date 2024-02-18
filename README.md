@@ -412,3 +412,38 @@ mod test {
     }
 }
 ```
+## 3) Afficher un dégradé de couleur
+
+Maintenant qu'on peut facilement générer des couleurs on va faire ensemble quelque chose d'un peu plus sympa qu'une image noire.
+
+![assets/gradient.png](assets/gradient.png)
+
+On va donc s'attaquer à cette boucle :
+```rust
+        for i in buffer.iter_mut() {
+            *i = 0; // write something more funny here!
+        }
+```
+
+Au lieu de mettre un zéro dans chaque pixel on va plutôt récupérer l'index au
+quel il se trouve et l'utiliser pour mettre une teinte plus ou moins forte de
+rouge.
+
+```rust
+        // On va avoir besoin de connaître la taille totale du buffer AVANT d'entrer dans la boucle
+        let buffer_len = buffer.len();
+
+        // Ici grace au `.enumerate()` on récupère l'index auquel on se trouve dans la boucle en plus du pixel a modifier (précédemment appelé `i`)
+        for (idx, pixel) in buffer.iter_mut().enumerate() {
+            // On commence par convertir l'index en une valeur qui va de `0` à `1` où `1` sera renvoyé lorsque l'index atteint la taille du buffer.
+            // Si on veut c'est un simple pourcentage qui indique notre progression dans tous les pixels à modifier.
+            let progression = idx as f64 / buffer_len as f64;
+
+            // En multipliant la `progression` par `u8::MAX` on fait passer cette valeur de `0` à `u8::MAX` (`255`). On peut convertir le tout en `u8`.
+            let color = (progression * u8::MAX as f64) as u8;
+
+            // Pour notre dégradé on utilise seulement le canal du rouge
+            *pixel = rgb(color, 0, 0);
+        }
+```
+
