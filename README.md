@@ -412,6 +412,7 @@ mod test {
     }
 }
 ```
+
 ## 3) Afficher un dégradé de couleur
 
 Maintenant qu'on peut facilement générer des couleurs on va faire ensemble quelque chose d'un peu plus sympa qu'une image noire.
@@ -447,3 +448,303 @@ rouge.
         }
 ```
 
+
+## 4) Simplifier la manière dont on se balade sur les pixels
+
+Si maintenant on voulait faire aller le dégradé de gauche a droite on se rends
+compte que c'est assez complexe parce qu'on a aucun moyen de spécifier « le
+pixel de droite ».
+
+Dans cette partie on va voir comment se simplifier la vie en créant un type qui
+représente notre buffer et qui nous permet de se balader dessus en spécifiant
+des coordonnés plutôt qu'un index de pixel :
+
+```rust
+buffer[(x, y)] = rgb(color);
+```
+
+De la même manière que `minifb` ne peut pas se débrouiller sans connaître la `WIDTH` et la `HEIGHT` de la fenêtre nous allons également en avoir besoin.
+Donc la structure qui va représenter ce buffer va contenir au minimum ces deux paramètres et le vrai buffer qu'on est entrain d'abstraire :
+
+```rust
+pub struct WindowBuffer {
+    width: usize,
+    height: usize,
+
+    buffer: Vec<u32>,
+}
+```
+
+### Créer la structure
+
+Au départ pour créer la structure on a simplement besoin de la `width` et `height` :
+```rust
+impl WindowBuffer {
+    pub fn new(width: usize, height: usize) -> Self {
+        Self {
+            width,
+            height,
+            buffer: vec![0; width * height],
+        }
+    }
+}
+```
+
+On peut ensuite remplacer la vieille création du buffer par notre nouveau type :
+```diff
+-   let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
++   let mut buffer = WindowBuffer::new(WIDTH, HEIGHT);
+```
+
+### Afficher la structure
+
+Pour pouvoir la suite des exercices et pour pouvoir déboguer on va implémenter
+une manière de visualiser notre tableau au format texte avec des points (`.`)
+quand un pixel vaut `0` et un `#` quand la valeur est différente de zéro.
+
+Pour faire cela on va implémenter le trait [`Display`](https://doc.rust-lang.org/stable/std/fmt/trait.Display.html).
+C'est le trait qu'utilise rust pour afficher les structures.
+Il y a également le trait [`Debug`](https://doc.rust-lang.org/stable/std/fmt/trait.Debug.html) qui peut être intéressant à connaître.
+Celui ci est aussi utilisé par rust pour afficher des structures mais plutôt lorsque l'on souhaite déboguer quelque chose.
+C'est par exemple la visualisation qui est utilisée par la macro `dbg!`.
+Ou lorsqu'on affiche des choses avec la macro `print!`, si on utilise `{}` ça utilisera l'implémentation de `Display` tandis que si on utilise `{:?}` c’est l'implémentation de `Debug` qui sera utilisé.
+
+Voilà un template qui ne fonctionne pas de l'implémentation:
+```rust
+use std::fmt;
+
+impl fmt::Display for WindowBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.buffer[0] {
+            0 => f.write_str(".")?,
+            _ => f.write_str("#")?,
+        }
+        f.write_str("\n")?;
+
+        Ok(())
+    }
+}
+```
+Ça va être a toi d'écrire le code qui fonctionne et tu pourrais t’aider avec une de ces fonctions :
+- [`chunks`](https://doc.rust-lang.org/stable/std/primitive.slice.html#method.chunks)
+- [`chunks_exact`](https://doc.rust-lang.org/stable/std/primitive.slice.html#method.chunks_exact)
+
+Pour t'aider j’ai écris un test que tu peux copier coller dans ton module de `test`s. Il n’utilise pas `proptest` alors il n’y a pas besoin de le mettre dans la macro, il peut aller juste en dessous du `test_rgb()`.
+```rust
+    #[test]
+    fn display_window_buffer() {
+        let mut buffer = WindowBuffer::new(4, 4);
+        assert_eq!(
+            buffer.to_string(),
+            "....
+....
+....
+....
+"
+        );
+        buffer.buffer[1] = 1;
+        buffer.buffer[3] = 3;
+        buffer.buffer[4] = 4;
+        buffer.buffer[6] = 6;
+        buffer.buffer[9] = 9;
+        buffer.buffer[11] = 11;
+        buffer.buffer[12] = 12;
+        buffer.buffer[14] = 14;
+        assert_eq!(
+            buffer.to_string(),
+            ".#.#
+#.#.
+.#.#
+#.#.
+"
+        );
+    }
+```
+
+/!\ Fait attention a l’indentation des chaînes de caractère, c’est très important de ne pas les indenter sinon cela rajoute des espaces dans la chaîne de caractère et elle devient invalide.
+
+### Faire du snapshot testing
+
+Comme on vient de le voir, écrire ce genre de tests est assez fastidieux et ce n’est pas hyper lisible a cause de l’indentation de la première ligne.
+Pour simplifier leurs écriture et leurs mise à jour on utilise beaucoup une techinque qui s’appelle le « snapshot testing ».
+
+#### En théorie
+
+Le but des snapshot tests est exactement le même que les tests classiques qu’on écrit avec un `assert_eq!` sauf que la partie droite du tests est générée par rust directement.
+Par exemple au lieu d’écrire :
+```rust
+assert_eq!(2 + 2, 4);
+```
+
+On pourrait écrire :
+```rust
+assert_display_snapshot!(2 + 2, @"4");
+```
+
+Sauf qu’ici, le contenu de la chaîne de caractère précédée d’un `@` à été auto-générée par la librairie de snapshot. Ce n’est pas nous qui l’avont écrit.
+Et si on décide de changer la partie gauche alors on peut simplement demander a la librairie de re-générer la partie droite.
+
+#### En pratique
+
+Étant donnée que cette approche de test n’est pas supportée par rust directement on va devoir importer une librairie qui le fait pour nous.
+La plus utilisée s’appelle `insta`. Je te laisse l’installer et me donner la commande que tu as utilisé.
+L’auteur de cette librairie a écrit un mini livre sur le fonctionnement et l’utilisation de insta ici : <https://insta.rs/>
+
+Une fois installée on va également avoir besoin d’un outil qui mets à jour les tests a notre place. Celui ci doit être installé comme une sous commande cargo :
+```
+cargo install cargo-insta
+```
+
+Une fois installé `cargo` va être augmenté d’une nouvelle commande.
+On peut maintenant lancer la commande `cargo insta` par exemple pour voir tout ce que cette nouvelle commande peut faire.
+
+Pour le moment nous n’avont rien a faire.
+Le workflow général d’utilisation d’`insta` c’est :
+1. J’écris mon test avec l’une des macro disponible et je laisse la partie droite vide :
+    - `assert_snapshot!("hello", @"");` - `assert_snapshot` est utilisé quand la partie gauche est déjà une string
+    - `assert_display_snapshot!(buffer, @"")` - `assert_display_snapshot` va utiliser l’implémentation de `Display` de la partie gauche pour générer la snapshot de droite
+    - `assert_debug_snapshot!(buffer, @"")` - `assert_debug_snapshot` va utiliser l’implémentation de `Debug` de la partie gauche pour générer la snapshot de droite
+2. Je lance `cargo insta` en mode test : `cargo insta test`
+3. Je lance `cargo insta` en mode review : `cargo insta review`
+4. Si j’ai le résultat attendu, j’accepte la snapshot. Sinon je la refuse, je corrige mon code puis je reprends a l’étape 2.
+
+Avant d’ajouter plus de code on va commencer par réécrire le test précédent avec `insta` :
+```rust
+    use insta::assert_snapshot;
+
+    #[test]
+    fn display_window_buffer() {
+        let mut buffer = WindowBuffer::new(4, 4);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @""
+        );
+        buffer.buffer[1] = 1;
+        buffer.buffer[3] = 3;
+        buffer.buffer[4] = 4;
+        buffer.buffer[6] = 6;
+        buffer.buffer[9] = 9;
+        buffer.buffer[11] = 11;
+        buffer.buffer[12] = 12;
+        buffer.buffer[14] = 14;
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @""
+        );
+    }
+```
+
+Je te laisse générer les nouvelles snapshots.
+
+#### En conclusion
+
+- C’est rends souvent l’écriture et la maintenance des tests plus rapide
+- Il n’y a plus de problème d’indentation, `insta` se débrouille tout seul pour que ce soit le plus lisible possible puis retire les identations en trop au moment de comparer les snapshots
+- `insta` n’est utile que quand on veut vérifier la valeur d’une variable. Si on doit comparer deux variables entre elle comme c’est le cas dans notre test `proptest` alors ça ne sert a rien
+- Souvent, même sans utiliser proptest, `insta` n’as que peu d’intérêt quand on vérifie une propriété sur des valeurs dans une boucle
+
+
+### Implémenter les crochets
+
+Maintenant qu'on a la structure et une bonne manière d’écrire des tests il nous
+faut une manière d'accéder au contenu du buffer facilement via les crochets.
+En rust, les crochets sont des opérateurs :
+- [`Index`](https://doc.rust-lang.org/stable/std/ops/trait.Index.html) si on est entrain de lire une valeur
+- [`IndexMut`](https://doc.rust-lang.org/stable/std/ops/trait.IndexMut.html) si on est entrain d'écrire une valeur
+
+On peut donc les implémenter sur n’importe quel type.
+Dans notre cas on veut implémenter les opérateurs `Index` et `IndexMut` **sur le type** `WindowBuffer` et **pour le type** `(usize, usize)` :
+```rust
+// Le trait qu’on implémente            Le type sur lequel on l’implémente
+//   vvvvvvvvvvvvvvv                     vvvvvvvvvvvv
+impl std::ops::Index<(usize, usize)> for WindowBuffer {
+//                   ^^^^^^^^^^^^^^
+//                Le type sur lequel on l’implémente => Pour savoir a quel endroit mettre cette partie 
+//                là il n’y a pas d’autre manière que de lire la documentation du trait `Index`
+
+    type Output = u32; // Le type qui sera retourné par la méthode index. Encore une fois il faut lire la documentation pour savoir que ça existe
+
+// Et finalement la signature de notre méthode avec le paramètre attendu et *une référence* vers le type de retour.
+    fn index(&self, (x, y): (usize, usize)) -> &Self::Output {
+        &self.buffer[0]
+    }
+}
+
+// Puis on implémente le second trait, tout est a peu près pareil a part que cette fois ci on renvoie une référence vers `Self::Output`
+impl IndexMut<(usize, usize)> for WindowBuffer {
+    fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut Self::Output {
+        &mut self.buffer[0]
+    }
+}
+```
+
+On peut déjà commencer par gérer les cas d’erreurs en ajoutant ce code aux deux méthodes :
+
+```rust
+        if x > self.width {
+            panic!(
+                "Tried to index in a buffer of width {} with a x of {}",
+                self.width, x
+            );
+        }
+        if y > self.height {
+            panic!(
+                "Tried to index in a buffer of height {} with a y of {}",
+                self.height, y
+            );
+        }
+```
+
+Une fois fait on va pouvoir écrire encore un nouveau type de test. Les tests qui doivent échouer :
+```rust
+    #[test]
+    #[should_panic]
+    fn test_bad_index_width() {
+        let mut buffer = WindowBuffer::new(4, 4);
+        buffer[(0, 5)] = 0;
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_index_height() {
+        let mut buffer = WindowBuffer::new(4, 4);
+        buffer[(5, 0)] = 0;
+    }
+```
+
+Ici en mettant allant chercher un `x` supérieur à la largeur de la grille (`width`) le programme doit planter.
+Et grace a l’annotation
+```rust
+    #[should_panic]
+```
+
+On peut dire a rust que pour que le test soit considéré comme valide alors **il faut** qu’il plante.
+
+----
+
+Finalement, c’est à toi de finir d’implémenter ces deux fonctions. Voilà un nouveau test a faire passer :
+```rust
+    #[test]
+    fn test_index() {
+        let mut buffer = WindowBuffer::new(4, 4);
+        buffer[(0, 1)] = 1;
+        buffer[(0, 3)] = 3;
+        buffer[(1, 0)] = 4;
+        buffer[(1, 2)] = 6;
+        buffer[(2, 1)] = 9;
+        buffer[(2, 3)] = 11;
+        buffer[(3, 0)] = 12;
+        buffer[(3, 2)] = 14;
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        .#.#
+        #.#.
+        .#.#
+        #.#.
+        "###
+        );
+    }
+```
+
+Dans ce test cependant, comme je ne fais que donner des valeurs aux cases de la grille je n’utilise jamais l’implémentation d’`Index`, mais toujours celles d’`IndexMut`.
