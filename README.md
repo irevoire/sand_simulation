@@ -1512,3 +1512,177 @@ N’hésite pas a utiliser une de ces fonctions pour vérifier le bord gauche :
 Pour vérifier qu’on ne sort pas du bord droit il n’y a pas d’autre manière que de regarder la `width` du buffer.
 
 ![Sablier sympa](assets/inifinite_hourglass.gif)
+
+## 7) Ajouter de l’interaction
+
+Le sablier c’est sympa mais on aimerait bien que ce soit un peu plus interactif
+donc on va essayer de récupérer les clics de l’utilisateur sur l’écran et les
+utiliser pour faire apparaître de nouveaux grains de sable.
+
+### Comprendre l’exemple de `minifb`
+
+Au lieu de lire la documentation j’ai décidé d’aller d’abord voir les exemples disponible sur le repo : <https://github.com/emoon/rust_minifb/tree/master/examples>
+Et top, un exemple s’appelle [`mouse.rs`](https://github.com/emoon/rust_minifb/blob/master/examples/mouse.rs).
+On va probablement trouver tout ce dont on a besoin dedans!
+
+Ils font pleins de trucs compliqué, j’ai pas lu parce qu’il y avait des maths, et puis soudainement, un bout de code semble parler de la souris [ici](https://github.com/emoon/rust_minifb/blob/ef07f55834d711a88676f011f96f97aae98f3be2/examples/mouse.rs#L43-L53):
+```rust
+        if let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard) {
+            let screen_pos = ((y as usize) * (width / 2)) + x as usize;
+
+            if window.get_mouse_down(MouseButton::Left) {
+                buffer[screen_pos] = 0x00ffffff; // white
+            }
+
+            if window.get_mouse_down(MouseButton::Right) {
+                buffer[screen_pos] = 0x00000000; // black
+            }
+        }
+```
+
+#### `get_mouse_pos`
+
+Maintenant on va devoir lire le code ligne par ligne et regarder ce que chaque fonctions font :
+```rust
+        if let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard) {
+```
+
+La première méthode utilisée est [`get_mouse_pos`](https://docs.rs/minifb/latest/minifb/struct.Window.html#method.get_mouse_pos)
+avec le paramètre [`MouseMode`](https://docs.rs/minifb/latest/minifb/enum.MouseMode.html).
+La documentation de la méthode `get_mouse_pos` dit :
+> Get the current position of the mouse relative to the current window The coordinate system is as 0, 0 as the upper left corner
+
+« Relative to the current window » veut dire que ça nous donne les coordonnée par rapport a notre fenêtre, et avec `0, 0` comme le coin en haut a gauche.
+C’est bien c’est exactement le modèle qu’on a suivi actuellement.
+
+Et la signature de la fonction c’est :
+```rust
+pub fn get_mouse_pos(&self, mode: MouseMode) -> Option<(f32, f32)>;
+```
+
+Une première chose étonnante c’est que ça renvoie une `Option`, dans quel cas est-ce qu’on ne pourrait pas trouver les coordonnés de la souris?
+L’autre chose étonnante c’est que le tuple de `x`/`y` sont des `f32`. Donc ils n’indiquent pas un pixel précis il semblerait.
+Et ça pose la question de savoir ce qu’il représente en réalité ? Quel est le maximum, est-ce qu’ils peuvent être négatif ?
+
+
+Ensuite on va jeter un œil au paramètre [`MouseMode`](https://docs.rs/minifb/latest/minifb/enum.MouseMode.html).
+On voit que c’est un `enum` :
+```rust
+pub enum MouseMode {
+    Pass,
+    Clamp,
+    Discard,
+}
+```
+
+Les valeurs possiblent ne nous disent pas grand chose mais en dessous on trouve la documentation pour chaque variante. Je te conseille de les lires.
+
+> Discard
+Discared if the mouse is outside the window
+
+Nous, comme pour l’exemple, c’est ce mode qui nous intéresse.
+Si la souris n’est pas dans la fenêtre alors ça ne nous intéresse pas et on l’ignore.
+
+----
+
+Moi avec ces informations je comprends que je veux utiliser le paramètre `MouseMode::Discard`.
+
+Mais je ne comprends pas la valeur renvoyée.
+
+Il y a deux possibilités à ce moment là, soit on s’arrête et on teste la fonction, soit on continue de lire l’exemple pour essayer de comprendre.
+
+#### `screen_pos`
+
+```rust
+            let screen_pos = ((y as usize) * (width / 2)) + x as usize;
+```
+
+Cette ligne converti le couple `x`/`y` en une position qu’ils peuvent écrire dans leurs buffer.
+Là on retrouve presque le code qu’on avait écrit au départ. On se serait attendu a quelque chose comme ça plutôt :
+```rust
+            let screen_pos = ((y as usize) * width) + x as usize;
+```
+
+D’où vient ce `/ 2`. Si on regarde un peu le reste de l’exemple alors on se rends compte qu’il y a plusieurs fois des commentaires indiquant :
+> Divide by / 2 here as we use 2x scaling for the buffer
+
+Ok donc il semblerait que ça ne nous concerne pas. On peut retirer ce `/ 2`.
+Et ce qu’on peut en déduire donc c’est que le `x` et `y` sont des `floats` mais on peut simplement les convertir en `usize` sans plus de difficulté pour récupérer des `x` et `y` en `usize`.
+
+#### `get_mouse_down`
+
+```rust
+            if window.get_mouse_down(MouseButton::Left) {
+                buffer[screen_pos] = 0x00ffffff; // white
+            }
+
+            if window.get_mouse_down(MouseButton::Right) {
+                buffer[screen_pos] = 0x00000000; // black
+            }
+```
+
+Une fois qu’on sait si on se trouve dans la fenêtre ou non et qu’on a les paramètres nécessaire ils utilisent une nouvelle méthode avec un nouveau paramètre.
+
+Encore une fois on va lire la documentation de la méthode [`get_mouse_down`](https://docs.rs/minifb/latest/minifb/struct.Window.html#method.get_mouse_down) indique :
+> Check if a mouse button is down or not
+
+Et du paramètre [`MouseButton`](https://docs.rs/minifb/latest/minifb/enum.MouseButton.html) :
+
+> The various mouse buttons that are availible
+
+Là tu pourrais faire une pause pour faire une PR où tu corriges leurs documentation déjà.
+Ensuite les différents variants possible sont :
+```rust
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+}
+```
+
+C’est assez explicite, avec cette méthode on peut donc savoir si, **en ce moment**, l’utilisateur est entrain de faire un clic droit, un clic gauche ou un clic molette.
+
+
+### Mettre tout ce qu’on a appris en pratique
+
+On a maintenant toutes les infos necessaires pour faire apparaître un grain de sable à chaque fois que l’utilisateur clique quelque part.
+Mais il faut qu’on décide a quel endroit du code on va récupérer les interactions de l’utilisateur.
+On va modifier notre boucle de jeu et rajouter ça en première étape :
+1. On récupère et on applique les actions utilisateur
+2. On mets à jour le monde
+3. On mets à jour le buffer d’affichage
+4. On mets à jour l’écran à partir du buffer
+
+Encore une fois, j’ai décidé complètement arbitrairement (et je pense que c’est du mauvais code) de gérer les interactions de l’utilisateur dans le `World` directement.
+On va donc définir cette nouvelle méthode qui a à la fois besoin du `World` et de la `Window` de `minifb` :
+```rust
+    pub fn handle_user_input(&mut self, window: &Window) {
+        if let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard) {
+            if window.get_mouse_down(MouseButton::Left) {
+                self.world.push(Sand {
+                    x: x as usize,
+                    y: y as usize,
+                });
+            }
+        }
+    }
+```
+
+Puis dans la boucle de jeu :
+```rust
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        world.handle_user_input(&window);
+        world.update(&buffer);
+        world.display(&mut buffer);
+
+        // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
+        window
+            .update_with_buffer(buffer.buffer(), buffer.width(), buffer.height())
+            .unwrap();
+    }
+```
+
+Et tadaaa
+
+![](assets/interaction.gif)
+
