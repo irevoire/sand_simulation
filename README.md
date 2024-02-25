@@ -448,7 +448,6 @@ rouge.
         }
 ```
 
-
 ## 4) Simplifier la manière dont on se balade sur les pixels
 
 Si maintenant on voulait faire aller le dégradé de gauche a droite on se rends
@@ -666,6 +665,7 @@ impl std::ops::Index<(usize, usize)> for WindowBuffer {
 
 // Et finalement la signature de notre méthode avec le paramètre attendu et *une référence* vers le type de retour.
     fn index(&self, (x, y): (usize, usize)) -> &Self::Output {
+        // Ici on fait ce qu'on veut mais on doit renvoyer une référence vers notre buffer interne
         &self.buffer[0]
     }
 }
@@ -673,6 +673,7 @@ impl std::ops::Index<(usize, usize)> for WindowBuffer {
 // Puis on implémente le second trait, tout est a peu près pareil a part que cette fois ci on renvoie une référence vers `Self::Output`
 impl IndexMut<(usize, usize)> for WindowBuffer {
     fn index_mut(&mut self, (x, y): (usize, usize)) -> &mut Self::Output {
+        // Ici on fait ce qu'on veut mais on doit renvoyer une référence **mutable** vers notre buffer interne
         &mut self.buffer[0]
     }
 }
@@ -722,7 +723,7 @@ On peut dire a rust que pour que le test soit considéré comme valide alors **i
 
 ----
 
-Finalement, c’est à toi de finir d’implémenter ces deux fonctions. Voilà un nouveau test a faire passer :
+Finalement, c’est à toi de finir d’implémenter ces deux fonctions. Voilà un nouveau test a faire passer qui vérifie que ton implémentation fonctionne bien :
 ```rust
     #[test]
     fn test_index() {
@@ -748,3 +749,160 @@ Finalement, c’est à toi de finir d’implémenter ces deux fonctions. Voilà 
 ```
 
 Dans ce test cependant, comme je ne fais que donner des valeurs aux cases de la grille je n’utilise jamais l’implémentation d’`Index`, mais toujours celles d’`IndexMut`.
+Quelle est la meilleure manière de s’assurer qu’`Index` et `IndexMut` fonctionnent pareil :
+1. Quel type de test parmis tous ceux qu’on a vu
+2. Écrit le test
+
+### Faire un dégradé qui va de gauche a droite
+
+Maintenant qu’on a toutes ces fonctions on peut enfin faire notre dégradé qui va de gauche a droite au lieu d’aller de haut en bas !
+
+Mais un nouveau problème se pose, on va avoir besoin d’accéder a la `height` et la `width` de notre buffer pour savoir ou est-ce qu’on en est dans le dégradé mais ces valeurs ne sont pas accessible dans notre structure.
+Il y a en général deux manières de régler ce problème.
+
+#### Rendre les champs publique
+
+La première manière, qui semble la plus simple et efficace c’est de simplement rendre ces deux champs publique dans notre structure :
+```diff
+pub struct WindowBuffer {
+-    width: usize,
+-    height: usize,
++    pub width: usize,
++    pub height: usize,
+
+    buffer: Vec<u32>,
+}
+```
+
+Maintenant dans le code on peut très simplement accéder a la `width` en écrivant `buffer.width`.
+Et en bonus on peut même modifier les dimensions en hauteur et en largeur de notre buffer, top non ?
+
+Et bien non parce que si quelqu’un venait a modifier la `width` sans que l’on ait modifié notre `buffer` alors tout ce qu’on a écrit au dessus va arrêter de fonctionner.
+C’est pour ça qu’on choisi assez rarement cette approche finalement.
+
+#### Utiliser des getters et des setters
+
+L’autre approche consiste a définir des `setters` et des `getters`.
+Les `getters` sont des méthodes qui, dans notre cas, nous renvoient la `width` et la `height`.
+Et les `setters` nous laissent la modifier.
+
+Dans notre cas on ne sait pas trop quoi faire si elles sont modifiée donc on va seulement définir les `getters`.
+Voilà à quoi ça pourrait ressembler :
+```rust
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
+    }
+```
+
+Dans certains langages on pourrait appeler les méthodes `get_width` et `get_height`.
+Mais en rust on préfère mettre le nom du champ plutôt que de mettre un `get_` devant toutes nos méthodes.
+
+Pour les `setters` par contre on les aurait plutôt appelé `set_width` et `set_height` je pense. Ça dépends un peu du contexte des fois on voit aussi des `with_width` / `with_height` ou autre.
+
+-----
+
+Une fois ce problème réglé, on peut repartir écrire notre dégradé.
+La première étape c’est de retirer le vecteur qu’on utilisait comme buffer avant pour utiliser notre nouveau type :
+```diff
+-    let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
++    let mut buffer = WindowBuffer::new(WIDTH, HEIGHT);
+```
+
+Et ensuite, pour rappel, actuellement la boucle qui faisait le dégradé ressemblait à ça :
+```rust
+        // On va avoir besoin de connaître la taille totale du buffer AVANT d'entrer dans la boucle
+        let buffer_len = buffer.len();
+
+        // Ici grace au `.enumerate()` on récupère l'index auquel on se trouve dans la boucle en plus du pixel a modifier (précédemment appelé `i`)
+        for (idx, pixel) in buffer.iter_mut().enumerate() {
+            // On commence par convertir l'index en une valeur qui va de `0` à `1` où `1` sera renvoyé lorsque l'index atteint la taille du buffer.
+            // Si on veut c'est un simple pourcentage qui indique notre progression dans tous les pixels à modifier.
+            let progression = idx as f64 / buffer_len as f64;
+
+            // En multipliant la `progression` par `u8::MAX` on fait passer cette valeur de `0` à `u8::MAX` (`255`). On peut convertir le tout en `u8`.
+            let color = (progression * u8::MAX as f64) as u8;
+
+            // Pour notre dégradé on utilise seulement le canal du rouge
+            *pixel = rgb(color, 0, 0);
+        }
+```
+
+On va la réécrire ligne par ligne :
+```rust
+        // On va avoir besoin de connaître la taille totale du buffer AVANT d'entrer dans la boucle
+        let buffer_len = buffer.len();
+```
+
+Maintenant on a plus besoin de connaître la taille totale du buffer mais juste la largeur totale de la fenêtre étant donné qu’on ne va plus qu’aller de gauche a droite.
+On peut retirer cette ligne entièrement on utilisera notre nouvelle méthode `width()` pour récupérer la largeur maximale plus tard.
+
+----
+
+```rust
+        // Ici grace au `.enumerate()` on récupère l'index auquel on se trouve dans la boucle en plus du pixel a modifier (précédemment appelé `i`)
+        for (idx, pixel) in buffer.iter_mut().enumerate() {
+```
+
+On ne va plus itérer sur tous les éléments sans savoir ou on en est mais directement sur les `x` et les `y` comme cela :
+```rust
+        for y in 0..buffer.height() {
+            for x in 0..buffer.width() {
+```
+
+----
+
+```rust
+            // On commence par convertir l'index en une valeur qui va de `0` à `1` où `1` sera renvoyé lorsque l'index atteint la taille du buffer.
+            // Si on veut c'est un simple pourcentage qui indique notre progression dans tous les pixels à modifier.
+            let progression = idx as f64 / buffer_len as f64;
+
+            // En multipliant la `progression` par `u8::MAX` on fait passer cette valeur de `0` à `u8::MAX` (`255`). On peut convertir le tout en `u8`.
+            let color = (progression * u8::MAX as f64) as u8;
+
+            // Pour notre dégradé on utilise seulement le canal du rouge
+            *pixel = rgb(color, 0, 0);
+```
+
+On doit redéfinir la progression uniquement sur l’axe des `x`.
+```rust
+            // On commence par convertir l'index en une valeur qui va de `0` à `1` où `1` sera renvoyé lorsqu’on est a droite de l’écran.
+            // Si on veut c'est un simple pourcentage qui indique notre progression de la gauche vers la droite.
+            let progression = x as f64 / buffer.width() as f64;
+
+            // En multipliant la `progression` par `u8::MAX` on fait passer cette valeur de `0` à `u8::MAX` (`255`). On peut convertir le tout en `u8`.
+            let color = (progression * u8::MAX as f64) as u8;
+
+            // Pour notre dégradé on utilise seulement le canal du rouge
+            buffer[(x, y)] = rgb(color, 0, 0);
+```
+
+----
+
+Et voilà, tout est presque écrit.
+
+Mais si tu essaies de lancer le code tu vas te rendre compte qu’il reste une erreur :
+```rust
+error[E0308]: mismatched types
+   --> src/main.rs:41:35
+    |
+41  |         window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
+    |                ------------------ ^^^^^^^ expected `&[u32]`, found `&WindowBuffer`
+    |                |
+    |                arguments to this method are incorrect
+    |
+    = note: expected reference `&[u32]`
+               found reference `&WindowBuffer`
+```
+
+Effectivement, `minifb` ne sait pas ce qu’est un `WindowBuffer` et il ne peut pas accéder a son contenu.
+À toi de proposer une manière de régler le problème.
+
+-----
+
+Une fois ce problème résolu tadaaa :
+
+![left to write gradient](assets/left_write_gradient.png)
