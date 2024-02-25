@@ -1213,7 +1213,302 @@ Ici j’ai décidé de prendre le buffer en paramètre :
 Et maintenant on peut relancer le tout :
 ![Second lâché de grain de sable](assets/second_sand_drop.gif)
 
-Et maintenant n’oublie pas de mettre à jour ton test.
+Et surtout n’oublie pas de mettre à jour ton test avant de passer a la suite !
 
-## 6) Simuler plusieurs grains de sable avec l’ajout d’interactions utilisateur
+## 6) Simuler plusieurs grains de sable
 
+Regarder un seul grain de sable tomber c’est pas passionnant.
+Au lieu d’en faire mettre un seul a l’initialisation du monde, on va partir d’un monde vide :
+```diff
+-    let mut world = World {
+-        world: vec![Sand { x: WIDTH / 2, y: 0 }],
+-    };
++    let mut world = World { world: Vec::new() };
+```
+
+Puis les faire tomber a l’infini dans la boucle de jeu :
+```rust
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        world.world.push(Sand { x: WIDTH / 2, y: 0 });
+```
+
+![](assets/inifinite_sand_drop.gif)
+
+### Simuler un grain de sable qui rencontre un autre grain
+
+Un premier problème dans cette simulation c’est que quand deux grains de sables se recontre il ne se passe _rien_.
+Celui du haut traverse celui du bas.
+
+Pour mieux comprendre ce qu’il se passe on va faire un nouveau test beaucoup plus simple que la vidéo ci dessus.
+Je vais placer 3 grains de sables les uns au dessus des autres et on va les regarder se rencontrer :
+```rust
+    #[test]
+    fn sand_physic() {
+        let mut buffer = WindowBuffer::new(5, 4);
+        let mut world = World {
+            world: vec![
+                Sand { x: 2, y: 2 },
+                Sand { x: 2, y: 1 },
+                Sand { x: 2, y: 0 },
+            ],
+        };
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        ..#..
+        ..#..
+        ..#..
+        .....
+        "###
+        );
+        world.update(&buffer);
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        .....
+        ..#..
+        ..#..
+        ..#..
+        "###
+        );
+        world.update(&buffer);
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        .....
+        .....
+        ..#..
+        ..#..
+        "###
+        );
+        world.update(&buffer);
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        .....
+        .....
+        .....
+        ..#..
+        "###
+        );
+    }
+```
+
+Le test est un peu long mais il permet de bien visualiser le problème.
+Au lieu de s’empiler les grains de sables se rentrent dedans et c’est tout bonnement dégueulasse.
+Notre objectif c’est qu’ils se touchent mais pas plus avant le marriage et la fonction problématique c’est la mise à jour du monde :
+```rust
+    pub fn update(&mut self, buffer: &WindowBuffer) {
+        for sand in self.world.iter_mut() {
+            // ici en plus de vérifier qu’on ne vas pas sortir de l’écran il faudrait
+            // aussi vérifier qu’on ne va pas rentrer dans un autre grain de sable
+            if sand.y < buffer.height() - 1 {
+                sand.y += 1;
+            }
+        }
+    }
+```
+
+On pourrait être tenté de rajouter une boucle qui va vérifier que le monde ne contient pas d’autres grain de sable a la position juste en dessous :
+```rust
+    pub fn update(&mut self, buffer: &WindowBuffer) {
+        for sand in self.world.iter_mut() {
+            if self
+                .world
+                .iter()
+                // ici on doit donner la _future_ position de grain de sable. On incrémente donc `y`
+                .any(|s| (sand.x, sand.y + 1) == (s.x, s.y))
+            {
+                continue;
+            }
+            if sand.y < buffer.height() - 1 {
+                sand.y += 1;
+            }
+        }
+    }
+```
+
+Malheureusement, ce genre de double boucle ne sont pas possible en rust :
+```rust
+error[E0502]: cannot borrow `self.world` as immutable because it is also borrowed as mutable
+   --> src/main.rs:151:16
+    |
+150 |           for sand in self.world.iter_mut() {
+    |                       ---------------------
+    |                       |
+    |                       mutable borrow occurs here
+    |                       mutable borrow later used here
+151 |               if self
+    |  ________________^
+152 | |                 .world
+    | |______________________^ immutable borrow occurs here
+
+For more information about this error, try `rustc --explain E0502`.
+```
+
+C’est un problème avec les itérateurs de rust, tant qu’on est dans la boucle `for` qui a démarrée avec le `.iter_mut()` il est impossible d’accéder en lecture aux autres éléments du monde.
+
+Une manière simple de régler le problème c’est d’utiliser des index dans le vecteur. Ça fonctionne **tant qu’on ajoute pas d’éléments dans le monde**.
+Dans notre cas donc il n’y aura pas de problème.
+
+```rust
+    pub fn update(&mut self, buffer: &WindowBuffer) {
+        for index in 0..self.world.len() {
+            // Je récupère le grain de sable que je veux mettre à jour dès le début. Tu vas devoir dériver `Clone` sur le `Sand`.
+            let mut sand = self.world[index].clone();
+            // J’en profite pour mettre à jour sa position dès le début. Ce n’est pas un problème puisque je ne modifie qu’une copie.
+            sand.y += 1;
+            // Ici plus besoin de mettre à jour le y donc
+            if self.world.iter().any(|s| (sand.x, sand.y) == (s.x, s.y)) {
+                continue;
+            }
+            // Et ici plus besoin de faire un `-1` sur la `height` puisqu’on l’as déjà fais sur le `y` en amont
+            if sand.y < buffer.height() {
+                // Et finalement on mets tout le grain de sable à jour plutôt que seulement son `y`
+                self.world[index] = sand;
+            }
+        }
+    }
+```
+
+On peut relancer les tests et mettre à jour les `snapshots`.
+Après toutes les itérations dans notre test on se retrouve dans cette position :
+```rust
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        .....
+        ..#..
+        ..#..
+        ..#..
+        "###
+        );
+```
+
+C’est bien mieux, plus de fornication en cachette sous un même pixel !
+Mais maintenant on aimerait bien que les grains de sables tombent a droite et a gauche s’il y a de la place de disponible.
+
+### Mais attention au test qu’on écrit
+
+Ici on aurait pu continuer et passer à côté d’un problème subtil assez compliqué a voir en dehors d’un test.
+Si l’on change l’initialisation du monde avec les trois même grains de sable mais pas dans le même ordre comme cela :
+```rust
+        let mut world = World {
+            world: vec![
+                Sand { x: 2, y: 0 },
+                Sand { x: 2, y: 1 },
+                Sand { x: 2, y: 2 },
+            ],
+        };
+```
+
+En relançant le tests et en mettant à jour les snapshots on se rends compte qu’elles changent, et pas comme on en a envie :
+```rust
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        ..#..
+        ..#..
+        ..#..
+        .....
+        "###
+        );
+        world.update(&buffer);
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        ..#..
+        ..#..
+        .....
+        ..#..
+        "###
+        );
+```
+
+Ici les grains deviennent trop pudique et refusent de se suivre de trop près.
+Le problème vient encore une fois de la fonction `World::update`.
+Au lieu de mettre à jour les grains de sables dans l’ordre d’insertion (ou l’ordre dans lequel ils apparaissent dans le vecteur).
+Il faudrait qu’on les mettes à jour *par le bas*.
+C’est à dire qu’on veut d’abord mettre à jour ceux qui ont les `y` les plus **grands**.
+
+![l’évolution des `x` et `y` sur une grille en 2D](assets/grid.png)
+
+Une manière d’implémenter ça pourrait être de parcourir les `y` (ou les lignes) de bas en haut puis pour chaque grains de sable,
+s’il n’est pas sur la ligne observée on ne le mets pas à jour.
+```rust
+    pub fn update(&mut self, buffer: &WindowBuffer) {
+        // On parcours les `y` de bas en haut en faisant un itérateur qui va de la `height` jusqu’à 0.
+        // Comme on ne peut pas faire de range inversée `buffer.height()..0` on utilise le `.rev()`.
+        for y in (0..buffer.height()).rev() {
+            for index in 0..self.world.len() {
+                let mut sand = self.world[index].clone();
+                // On ne mets à jour que les grains de sable qui sont sur la ligne observée
+                if sand.y != y {
+                    continue;
+                }
+                sand.y += 1;
+                if self.world.iter().any(|s| (sand.x, sand.y) == (s.x, s.y)) {
+                    continue;
+                }
+                if sand.y < buffer.height() {
+                    self.world[index] = sand;
+                }
+            }
+        }
+    }
+```
+
+Maintenant on peut relancer nos tests et constater que les grains de sables se suivent sans jamais se rentrer dedans :
+```rust
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        .....
+        ..#..
+        ..#..
+        ..#..
+        "###
+        );
+```
+
+### Faire glisser un grain de sable sur un autre
+
+L’étape suivante serait de faire glisser les grains de sable les uns sur les autres.
+Une règle simple est de dire que lorsqu’un grain de sable rencontre un grain de sable en dessous de lui.
+Il regarde en bas à gauche ou à droite puis occupe l’espace s’il est disponible.
+
+```
+1)
+.#.
+...
+.#.
+---
+2)
+...
+.#.
+.#.
+---
+3)  OU
+...    ...
+...    ...
+##.    .##
+```
+
+Cette fois ci c’est a toi de le faire, le test qu’on a déjà écrit devrait être suffisant pour vérifier que ça fonctionne.
+
+/!\ Fait bien attention aux bords de l’écran !
+
+Quand on regarde si on peut aller a gauche on risque de sortir de rendre un `usize` négatif et ça crash.
+N’hésite pas a utiliser une de ces fonctions pour vérifier le bord gauche :
+- [`saturating_sub`](https://doc.rust-lang.org/stable/std/primitive.usize.html#method.saturating_sub) qui retire `1` à la valeur OU la laisse a zéro si elle y était déjà.
+- [`checked_sub`](https://doc.rust-lang.org/stable/std/primitive.usize.html#method.checked_sub) qui renvoie une option si jamais l’opération n’as pas fonctionné.
+
+Pour vérifier qu’on ne sort pas du bord droit il n’y a pas d’autre manière que de regarder la `width` du buffer.
+
+![Sablier sympa](assets/inifinite_hourglass.gif)
