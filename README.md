@@ -682,13 +682,13 @@ impl IndexMut<(usize, usize)> for WindowBuffer {
 On peut déjà commencer par gérer les cas d’erreurs en ajoutant ce code aux deux méthodes :
 
 ```rust
-        if x > self.width {
+        if x >= self.width {
             panic!(
                 "Tried to index in a buffer of width {} with a x of {}",
                 self.width, x
             );
         }
-        if y > self.height {
+        if y >= self.height {
             panic!(
                 "Tried to index in a buffer of height {} with a y of {}",
                 self.height, y
@@ -899,10 +899,319 @@ error[E0308]: mismatched types
 ```
 
 Effectivement, `minifb` ne sait pas ce qu’est un `WindowBuffer` et il ne peut pas accéder a son contenu.
-À toi de proposer une manière de régler le problème.
+À toi de proposer et d’implémenter une solution.
 
 -----
 
 Une fois ce problème résolu tadaaa :
 
 ![left to write gradient](assets/left_write_gradient.png)
+
+
+## 5) Simuler un grain de sable
+
+Ça y est, on à tous les outils pour essayer de simuler notre premier grain de sable !
+
+Encore une fois, la première question a se poser c’est :
+
+### C’est quoi un grain de sable
+
+Ou, plus précisément, « de quoi j’ai besoin pour afficher un grain de sable ».
+
+Pour l’instant dans notre première version on pourrait se dire qu’un grain de sable est un pixel blanc sur un écran noir qui tombe **vers le bas**.
+On aurait alors seulement besoin de stocker sa position a l’écran.
+
+```rust
+struct Sand {
+    x: usize,
+    y: usize,
+}
+```
+
+Et il va falloir une structure qui stockes tous ces grains de sables. En général dans les jeux vidéos on appelle ça le monde, ou « world » en anglais :
+```rust
+struct World {
+    world: Vec<Sand>,
+}
+```
+
+Ensuite, notre boucle de jeu va se dérouler en trois étapes :
+1. On mets à jour le monde
+2. On mets à jour le buffer d’affichage
+3. On mets à jour l’écran à partir du buffer
+
+### 5.1) Mettre à jour le monde
+
+Dans notre cas mettre à jour le monde ça veut dire : faire descendre les grains de sables.
+
+Autrement dit, on passe sur chaque grain de sable contenu dans le monde, et on **augmente** leurs y.
+Et oui parce que attention :
+- Quand `x` augmente, le pixel va vers la **droite**.
+- Mais quand `y` augmente, le pixel va vers le **bas**.
+
+![l’évolution des `x` et `y` sur une grille en 2D](assets/grid.png)
+
+En sachant ça il devient assez simple de mettre à jours tous les grains de sable :
+
+```rust
+impl World {
+    pub fn update(&mut self) {
+        // on va modifier les grains donc on doit itérer en mode mutable sur les grains de sable
+        for sand in self.world.iter_mut() {
+            sand.y += 1;
+        }
+    }
+}
+```
+
+### 5.2) Mettre à jour le buffer d’affichage
+
+Une fois qu’on a mis à jour la position de tous les grains de sable il faut qu’on mette à jour le buffer d’affichage.
+On est dans un cas où on a deux objets qui ont besoin l’un de l’autre.
+Il n’y a pas de règle sur comment les faires intéragir ensemble, j’ai décidé arbitrairement que c’était le monde qui allait prendre en paramètre le buffer :
+```rust
+    pub fn display(&self, buffer: &mut WindowBuffer) {
+        todo!();
+    }
+```
+
+On a pas besoin de se modifier soit même donc on peut prendre `self` par simple référence.
+Mais on doit modifier le buffer donc on le prends avec une référence mutable.
+
+----
+
+Le but de cette fonction va être de parcourir chaque grain de sable et mettre un pixel blanc à la position correspondante dans le buffer :
+```rust
+    pub fn display(&self, buffer: &mut WindowBuffer) {
+        for sand in self.world.iter() {
+            buffer[(sand.x, sand.y)] = u32::MAX;
+        }
+    }
+```
+
+### Mettre à jour le programme principal
+
+On a tous les outils nécessaires. Il ne reste plus qu’à connecter tous les bouts ensemble dans la boucle principale :
+
+#### Créer le monde
+
+Pour l’instant pour faire simple on va simplement créer un monde qui contient un seul grain de sable :
+
+```rust
+    let mut world = World {
+        world: vec![Sand { x: WIDTH / 2, y: 0 }],
+    };
+```
+
+À insérer **avant** la boucle de jeu à côté de la création du buffer et de la fenêtre.
+J’ai positionné un grain de sable en haut de l’écran et au centre.
+
+#### Mettre à jour la boucle de jeu
+
+On peut maintenant retirer tout le code lié au dégradé :
+```rust
+        for y in 0..buffer.height() {
+            for x in 0..buffer.width() {
+                // On commence par convertir l'index en une valeur qui va de `0` à `1` où `1` sera renvoyé lorsque l'index atteint la taille du buffer.
+                // Si on veut c'est un simple pourcentage qui indique notre progression dans tous les pixels à modifier.
+                let progression = x as f64 / buffer.width() as f64;
+
+                // En multipliant la `progression` par `u8::MAX` on fait passer cette valeur de `0` à `u8::MAX` (`255`). On peut convertir le tout en `u8`.
+                let color = (progression * u8::MAX as f64) as u8;
+
+                // Pour notre dégradé on utilise seulement le canal du rouge
+                buffer[(x, y)] = rgb(color, 0, 0);
+            }
+        }
+```
+
+À la place on va mettre à jour le monde :
+```rust
+        world.update();
+```
+
+Puis mettre à jour le buffer a partir du nouveau monde :
+```rust
+        world.display(&mut buffer);
+```
+
+Et finalement on garde le code qu’on avait pour mettre à jour la fenêtre.
+Ce qui nous donne au total cette boucle de jeu :
+```rust
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        world.update();
+        world.display(&mut buffer);
+
+        // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
+        window
+            .update_with_buffer(buffer.buffer(), WIDTH, HEIGHT)
+            .unwrap();
+    }
+```
+
+On peut maintenant lancer le code !
+
+![Le premier grain de sable](assets/first_sand_drop.mp4)
+
+### Les problèmes
+
+On voit plusieurs problème avec cette vidéo.
+1. Au lieu de voir **un grain** de sable tomber on voit une ligne se former.
+2. Une fois arrivé en bas de l’écran, la fenêtre se ferme et le programme panique avec cette erreur:
+```rust
+thread 'main' panicked at src/main.rs:163:19:
+Tried to index in a buffer of height 360 with a y of 360
+stack backtrace:
+   0: rust_begin_unwind
+             at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/std/src/panicking.rs:645:5
+   1: core::panicking::panic_fmt
+             at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/panicking.rs:72:14
+   2: <sand_simulation::WindowBuffer as core::ops::index::IndexMut<(usize,usize)>>::index_mut
+             at ./src/main.rs:130:13
+   3: sand_simulation::World::display
+             at ./src/main.rs:163:19
+   4: sand_simulation::main
+             at ./src/main.rs:31:9
+   5: core::ops::function::FnOnce::call_once
+             at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.```
+
+La première chose quand on observe ce genre de problème c’est d’écrire des tests qui nous permette de les reproduire comme ça quoi qu’il arrive :
+- On oublie pas ce comportement, bien ou mauvais
+- Si on essaie de régler le problème le test est déjà là et nous dira si notre approche a fonctionné
+- Il arrive assez fréquemment qu’on essayant de reproduire le bug on n’y arrive pas parce qu’il n’a pas été causéé par ce qu’on croyait. Écrire des tests maintenant nous assures qu’on va s’attaquer a la partie vraiment buggé du code.
+
+#### Reproduire le premier problème
+
+Le test pour le premier problème est simple :
+1. On créé le monde avec un grain de sable en haut au centre
+2. On affiche le monde dans le buffer
+3. On `snapshot` le buffer avec `insta`
+4. On répète les étapes `2` et `3` quelque fois
+
+```rust
+    #[test]
+    fn simple_sand_drop() {
+        let mut buffer = WindowBuffer::new(5, 4);
+        let mut world = World {
+            world: vec![Sand { x: 3, y: 0 }],
+        };
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###""###
+        );
+
+        world.update();
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###""###
+        );
+
+        world.update();
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###""###
+        );
+    }
+```
+
+Je te laisse générer les snapshots, mettre à jour le test et vérifier qu’on observe bien une ligne au lieu d’un seul grain de sable.
+
+#### Reproduire le second problème
+
+Ce qui a causé le second problème est moins clair par contre. Je te laisse écrire le test le plus petit possible qui reproduise le problème.
+Tu peux le faire avec un seul appel a `update` et `display` après avoir initialisé le `World`.
+
+#### Résoudre le premier problème
+
+Une fois qu’on a nos deux tests on est prêt a régler les problèmes une fois pour toute.
+Le problème de la ligne vient du fait que quand on mets à jour la position d’un grain de sable on ne supprime pas son pixel dans le buffer.
+Donc a l’étape suivante on affiche le grain de sable une seconde fois alors que son ancienne pixel est toujours intact dans le buffer.
+
+
+Il y a plusieurs manière de régler ce problème, je vais en proposer une mais **c’est à toi** d’en trouver une autre.
+
+------
+
+Une solution pourrait être de supprimer **tout le contenu** du buffer **avant** de commencer a écrire les nouveaux grain de sable dedans.
+Pour cela on pourrait utiliser une double boucle comme ça :
+```rust
+    pub fn display(&self, buffer: &mut WindowBuffer) {
+        // On remets le buffer a zero avant d’écrire quoi que ce soit dedans
+        for x in 0..buffer.width() {
+            for y in 0..buffer.height() {
+                buffer[(x, y)] = 0;
+            }
+        }
+
+        for sand in self.world.iter() {
+            buffer[(sand.x, sand.y)] = u32::MAX;
+        }
+    }
+```
+
+Mais en général je préfère définir une méthode sur le buffer qui s’en occupe pour moi :
+
+```rust
+    pub fn reset(&mut self) {
+        self.buffer.fill(0);
+    }
+```
+
+Quand on l’implémente de ce côté on peut en plus bénéficier des méthodes définie sur les vecteurs ce qui rends la tache plus facile a coder ET plus rapide a exécuter.
+Ici j’utilise la méthode [`.fill(0)`](https://doc.rust-lang.org/stable/std/primitive.slice.html#method.fill) qui permet de donner à **toutes les valeurs** du vecteur la valeur spécifiée.
+Et ensuite la méthode `display` définie précédemment devient aussi plus simple a comprendre et écrire :
+```rust
+    pub fn display(&self, buffer: &mut WindowBuffer) {
+        // On remets le buffer a zero avant d’écrire quoi que ce soit dedans
+        buffer.reset();
+
+        for sand in self.world.iter() {
+            buffer[(sand.x, sand.y)] = u32::MAX;
+        }
+    }
+```
+
+Une fois implémenté tu peux mettre à jour le test et relancer le code pour vérifier que ça fonctionne.
+
+-----
+
+Maintenant c’est a toi de trouver une autre manière de faire.
+Avant de passer trop de temps a l’implémenter n’hésite pas a me demander si ton approche est bonne.
+
+#### Résoudre le second problème
+
+Le second problème vient du fait que dans notre fonction `World::update()` peut faire sortir les grains de sable de l’écran.
+```rust
+    pub fn update(&mut self) {
+        for sand in self.world.iter_mut() {
+            sand.y += 1; // ici, si on est déjà en bas de l’écran alors on devrait juste laisser le grain de sable en place
+        }
+    }
+```
+
+Le problème c’est que dans cette fonction on ne connait pas la taille de l’écran et le `y` maximum qui peut exister.
+Encore une fois plusieurs solutions sont possible, pour en citer quelques unes :
+- On pourrait prendre la `height` en paramètre de la fonction
+- On pourrait stocker la `height` dans `self` pour pouvoir y accéder de partout
+- On pourrait prendre le buffer en entier en paramètre et en lecture seule (la fonction qui mets à jour le monde ne doit pas mettre à jour le buffer aussi)
+
+Ici j’ai décidé de prendre le buffer en paramètre :
+```rust
+    pub fn update(&mut self, buffer: &WindowBuffer) {
+        for sand in self.world.iter_mut() {
+            if sand.y < buffer.height() - 1 {
+                sand.y += 1;
+            }
+        }
+    }
+```
+
+Et maintenant on peut relancer le tout :
+![Second lâché de grain de sable](assets/second_sand_drop.mp4)
+
+Et maintenant n’oublie pas de mettre à jour ton test.
+
