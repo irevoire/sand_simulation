@@ -1051,7 +1051,7 @@ Ce qui nous donne au total cette boucle de jeu :
 
 On peut maintenant lancer le code !
 
-![Le premier grain de sable](assets/first_sand_drop.mp4)
+![Le premier grain de sable](assets/first_sand_drop.gif)
 
 ### Les problèmes
 
@@ -1211,7 +1211,9 @@ Ici j’ai décidé de prendre le buffer en paramètre :
 ```
 
 Et maintenant on peut relancer le tout :
-![Second lâché de grain de sable](assets/second_sand_drop.mp4)
+![Second lâché de grain de sable](assets/second_sand_drop.gif)
 
 Et maintenant n’oublie pas de mettre à jour ton test.
+
+## 6) Simuler plusieurs grains de sable avec l’ajout d’interactions utilisateur
 
