@@ -2287,3 +2287,236 @@ Puis :
 +                if self.world.binary_search(&sand).is_err() {
 ```
 
+### On a fini d’implémenter tout ce qu’on voulait !
+
+Et voilà, avec cette optimisation on ne devrait plus avoir de problème avant un moment n’est-ce pas ?
+
+Et bien non, de mon côté j’arrive toujours a faire ramer le code relativement vite :
+```
+get user input took: 54.257ms
+	sorting: 3.876875ms
+		getting the sand grains: 1.966495ms
+		does the sand already exists: 39.817456ms
+	everything else: 78.6265ms
+updating the world took: 82.508708ms
+displaying the world: 2.011958ms
+refreshing the screen took: 3.379292ms
+displayed 85413 elements
+```
+
+Mais au lieu de devenir lent après `20_000` éléments le code est devenu lent au bout de `85_000` éléments !
+On peut se dire qu’il est devenu 4 fois plus rapide en seulement une dizaine de ligne de modifiée.
+
+Mais on ne peut s’empêcher d’être déçu puisque dans nos estimations notre code n’aurait plus jamais eu besoin d’optimisation.
+C’est quelque chose de très commun en informatique quand on optimise quelque chose.
+Il faut toujours bien vérifier qu’on obtient le résultat auquel on s’attends.
+
+Ici on peut faire quelques observations sur ce qu’il s’est passé :
+- Faire apparaitre de nouveau grains de sable est devenu super lent : 54ms
+- Trier tous les grains de sable est également devenu beaucoup plus lent qu’avant sans être problématique pour autant : 3.8ms
+- Le morceau de boucle qu’on a optimisée est toujours trop lente a : 39ms
+- Le reste de la boucle a également pris `78ms - 39ms = 39ms` alors qu’avant c’était plus ou moins instantané 
+
+La manière dont on optimise du code se fait souvent comme ça :
+1. On repère le bout de code qui ralentit tout
+2. Après avoir réfléchi très fort on arrive a s’en débarrasser ou le rendre beaucoup plus rapide
+3. Le code n’est pas beaucoup plus rapide qu’avant mais de nouveau bout de code sont devenu lent
+
+En fait on se retrouve a faire une chasse aux « bottleneck ».
+Le bout le plus lent du code. Et à chaque fois qu’on en supprime un, un autre apparaît.
+
+----
+
+On pourrait passer des heures a essayer d’optimiser ce code et il y a énormément de choses a faire.
+Si jamais tu as des idées d’optimisation parles en moi et je pourrais te guider pour les implémenter et voir a quel point elle nous rende plus rapide.
+
+Mais pour ce projet on va s’arrêter a ce niveau d’optimisation et passer au dernier chapitre.
+
+## 9) Rendre le tout joli
+
+La dernière étape du projet sera de revenir aux bases et de rendre le tout plus joli.
+Si tu te souviens bien, au tout début je t’ai fais implémenter des fonctions qui servaient a la gestion de couleur mais ensuite on ne les as jamais utilisée.
+
+Tout ça c’était pour maintenant, on va rendre les grains de sable coloré !
+
+La première chose a faire c’est d’ajouter la couleur dans la structure qui représente un grain de sable :
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sand {
+    x: usize,
+    y: usize,
+
+    color: u32,
+}
+```
+
+Cela va casser beaucoup de bout de code, je te laisse les corriger.
+Pour le moment on va rendre les grains de sable jaune.
+Le jaune est un mélange de rouge et de vert ce qui veut dire que la valeur associée doit être : `0x00ffff00`
+Ou, en utilisant ta fonction : `rgb(u8::MAX, u8::MAX, 0)`.
+Utilise la valeur que tu préfères partout pour corriger ton code.
+
+Ensuite, tu vas constater que quand tu lances le code, les grains de sables sont toujours blanc.
+C’est parce qu’on a oublié de mettre à jour la fonction qui représente le monde dans le buffer.
+Je te laisse mettre à jour cette fonction en affichant la couleur stocké dans les grains de sable.
+
+### Faire varier les couleurs
+
+Le jaune c’est sympa mais ça ne rends pas le tout bien plus joli.
+On va maintenant faire varier la couleur des grains de sable au fil du temps.
+Il y a énormément de manière de faire ça mais j’ai décidé que je voulais faire quelque chose comme ça :
+- Au départ les grains de sable sont rouge : `rgb(u8::MAX, 0, 0)`
+- Au fur et a mesure ils deviennent jaune => on incrémente le vert
+- Puis ils deviennent vert => on décrémente le rouge
+- Puis on incrémente le bleu
+- Puis on décrémente le vert
+- Puis on incrémente le rouge
+- Puis on décrémente le bleu
+
+Et on recommence a l’infini.
+
+Dans ce genre de cas ma technique c’est de découper le problème en plus petit problème.
+On sait qu’on va avoir un cycle qui se répète a l’infini et que ce cycle sera le même pour toutes les couleurs. Simplement désynchronisé.
+
+Si on regarde uniquement le rouge alors il commence a `u8::MAX` puis :
+1. Il doit rester rouge pendant `u8::MAX` itération : `std::iter::repeat(u8::MAX).take(u8::MAX as usize)`
+2. Ensuite on fait redescendre le rouge a zéro : `(0..=u8::MAX).rev()`
+3. On reste a zéro le temps que le bleu augmente, puis que le vert descende : `std::iter::repeat(0).take(u8::MAX as usize * 2)`
+4. On augmente jusqu’à `u8::MAX` : `(0..u8::MAX)` 
+5. On reste a `u8::MAX` le temps que le bleu redescende : `std::iter::repeat(u8::MAX).take(u8::MAX as usize)`
+
+Étant donné que la première et la dernière opération sont les même on peut les mélanger en : `std::iter::repeat(u8::MAX).take(u8::MAX as usize * 2)`.
+
+Ensuite, grace a l’opérateur [`.chain()`](https://doc.rust-lang.org/stable/std/iter/trait.Iterator.html#method.chain) on peut relier des itérateurs ensemble les uns après les autres et ça nous donne :
+```rust
+    let channel = (0..u8::MAX) // On monte jusqu’à u8::MAX de 1 en 1
+        .chain(std::iter::repeat(u8::MAX).take(u8::MAX as usize * 2)) // On reste a u8::MAX PENDANT u8::MAX itération pour que l’autre channel puisse nous rejoindre
+        .chain((0..=u8::MAX).rev()) // On redescend jusqu’à 0
+        .chain(std::iter::repeat(0).take(u8::MAX as usize * 2)) // On reste a 0 pendant u8::MAX * 2
+        .cycle(); // On répète tout ça a l’infini
+```
+
+Maintenant il faut relier cet itérateur sur trois couleurs de manière désynchronisée :
+- Le rouge commence après `u8::MAX` itération : `channel.skip(u8::MAX as usize * 2)`
+- Le vert commence immédiatement et augmente : `channel`
+- Le bleu commence en plein milieu de la pause et doit rester a zéro pendant un moment : `channel.skip(u8::MAX as usize * 4)`
+
+Ensuite pour mélanger tout ça on va utiliser la méthode [`zip`](https://doc.rust-lang.org/stable/std/iter/fn.zip.html) qui lie les valeurs de deux itérateurs dans un tuple.
+Ici on va d’abord lier le rouge et le vert ce qui vas nous donner un itérateur de `(u8, u8)`.
+Puis on va relire le bleu a cet itérateur ce qui va finalement générer un `((u8, u8), u8)`.
+Comme ce n’est pas très pratique a manipuler on va le transformer en un seul tuple de 3 éléments grace a map : `.map(|((r, g), b)| (r, g, b))`
+
+```rust
+    let colors = channel
+        .clone()
+        .skip(u8::MAX as usize * 2)
+        .zip(channel.clone())
+        .zip(channel.clone().skip(u8::MAX as usize * 4))
+        .map(|((r, g), b)| (r, g, b))
+```
+
+Ensuite on va stocker cet itérateur dans le monde, le seul qui connait l’état de tout le logiciel mais un nouveau problème se pose :
+
+#### Quel est le type de cet itérateur
+
+Si j’essaie de définir une fonction qui créé tout cet itérateur pour moi et que je laisse rust me donner le type de retour alors voilà ce qu’on observe :
+```rust
+fn color_generator() {
+    let channel = (0..u8::MAX) // On monte jusqu’à u8::MAX de 1 en 1
+        .chain(std::iter::repeat(u8::MAX).take(u8::MAX as usize * 2)) // On reste a u8::MAX PENDANT u8::MAX itération pour que l’autre channel puisse nous rejoindre
+        .chain((0..=u8::MAX).rev()) // On redescend jusqu’à 0
+        .chain(std::iter::repeat(0).take(u8::MAX as usize * 2)) // On reste a 0 pendant u8::MAX * 2
+        .cycle(); // On répète tout ça a l’infini
+
+    let colors = channel
+        .clone()
+        .skip(u8::MAX as usize * 2)
+        .zip(channel.clone())
+        .zip(channel.clone().skip(u8::MAX as usize * 4))
+        .map(|((r, g), b)| (r, g, b));
+
+    colors
+}
+```
+
+L’erreur renvoyée indique :
+```rust
+error[E0308]: mismatched types
+   --> src/main.rs:271:5
+    |
+257 | fn color_generator() {
+    |                     - help: a return type might be missing here: `-> _`
+...
+269 |         .map(|((r, g), b)| (r, g, b));
+    |              ------------- the found closure
+270 |
+271 |     colors
+    |     ^^^^^^ expected `()`, found `Map<Zip<Zip<Skip<...>, ...>, ...>, ...>`
+    |
+    = note: expected unit type `()`
+                  found struct `Map<Zip<Zip<Skip<Cycle<Chain<Chain<Chain<Range<u8>, Take<Repeat<u8>>>, Rev<RangeInclusive<u8>>>, Take<...>>>>, ...>, ...>, ...>`
+            the full type name has been written to '/Users/irevoire/sand_simulation/target/debug/deps/sand_simulation-e0a21a8a3878e2a3.long-type-8255841897920051058.txt'
+```
+
+Un type tellement compliqué que même rust abandonne son écriture : `Map<Zip<Zip<Skip<Cycle<Chain<Chain<Chain<Range<u8>, Take<Repeat<u8>>>, Rev<RangeInclusive<u8>>>, Take<...>>>>, ...>, ...>, ...>`
+
+Pourtant nous on sait que ce qui nous intéresse c’est simplement quelque chose qui implémente le trait `Iterator<Item = (u8, u8, u8)`.
+Et bien c’est ce qu’on va dire a rust en écrivant exactement ce type de retour a la fonction
+
+```rust
+fn color_generator() -> impl Iterator<Item = (u8, u8, u8)> {
+```
+
+Cette écriture nous permet de dire à rust qu’on a aucune idée du type qu’on renvoie, mais qu’à la fin il va bien implémenter ce que le trait qu’on souhaite.
+
+
+Mais ensuite nouveau problème, lorsqu’on essaie d’écrire la même chose dans la structure `World` cette fois ci on se retrouve avec un message d’erreur beaucoup plus clair :
+```rust
+struct World {
+    world: Vec<Sand>,
+    colors: impl Iterator<Item = (u8, u8, u8)>,
+}
+```
+
+Et l’erreur :
+
+```rust
+error[E0562]: `impl Trait` only allowed in function and inherent method argument and return types, not in field types
+   --> src/main.rs:165:13
+    |
+165 |     colors: impl Iterator<Item = (u8, u8, u8)>,
+    |             ^^^^^^^^^^^^^^
+```
+
+En effet, il est interdit d’utiliser cette syntaxe dans une structure.
+Et il y a en fait une bonne raison, rust doit pouvoir stocker l’itérateur dans la structure, mais puisqu’on ne connait pas nous même son type, lui non plus ne le connait pas et il ne sait pas de combien de mémoire il aura besoin dans la structure.
+
+La manière la plus simple de résoudre le problème c’est de donner un type qui a une taille connue mais qui peut contenir des types dont on ne connait pas la taille : La [`Box`](https://doc.rust-lang.org/stable/std/boxed/struct.Box.html).
+Un type bien pratique qui permet juste de pointer vers une structure quelque part quelque soit sa taille.
+
+Le `World` devient alors :
+```rust
+struct World {
+    world: Vec<Sand>,
+    colors: Box<dyn Iterator<Item = (u8, u8, u8)>>,
+    //          ^^^ ici le `dyn` est obligatoire et signifie qu’on ne connait pas la taille de ce qui suit
+}
+```
+
+Ensuite on change l’initialisation :
+```rust
+    let mut world = World {
+        world: Vec::new(),
+        colors: Box::new(color_generator()),
+    };
+```
+
+Puis on change l’ajout de grain de sable par l’utilisateur :
+```rust
+                        let (r, g, b) = self.colors.next().unwrap();
+                        let sand = Sand {
+                            x,
+                            y,
+                            color: rgb(r, g, b),
+                        };
+```
