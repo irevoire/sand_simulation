@@ -1955,3 +1955,335 @@ Et la fonction de gestion des entrées utilisateur n’as pas spécialement rale
 En tout cas pas au point de devenir problématique.
 
 ### Mesurer les problèmes de performances dans une boucle
+
+Mesurer les performances de *toute* la boucle n’est pas si dur, on regarde l’heure **avant** la boucle puis on regarde combien de temps s’est écoulé **après** la boucle.
+Ça nous a permis d’identifier que c’était cette boucle le problème, mais maintenant pour optimiser le contenu de la boucle c’est plus complexe.
+Si j’essaie de mettre un print autour de la première opération par exemple :
+```rust
+            let now = Instant::now();
+            let mut sand = self.world[index].clone();
+            println!("\t\tgetting the sand grain: {:?}", now.elapsed());
+```
+
+(J’ai mis deux identation (`\t`) parce que cette durée représente l’intérieur du print suivant)
+
+On se retrouve avec quelque chose complètement illisible et dont on ne peut rien tirer :
+```
+...
+		getting the sand grain: 41ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 41ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 42ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+		getting the sand grain: 0ns
+	everything else: 85.263041ms
+```
+
+C’est normal, puisqu’on fait ça pour chaque grains de sable et qu’on génère des milliers de grains de sables très rapidement on va printer un millier de fois cette ligne.
+
+Une stratégie souvent utilisée pour régler ce problème est de d’additionner tous le temps qui a été passé dans chaque itération de la boucle :
+
+```rust
+        let mut get_sand = Duration::default();
+
+        let now = Instant::now();
+        for index in 0..self.world.len() {
+            let now = Instant::now();
+            let mut sand = self.world[index].clone();
+            get_sand += now.elapsed();
+            // ...
+        }
+        println!("\t\tgetting the sand grains: {:?}", get_sand);
+        println!("\teverything else: {:?}", now.elapsed());
+```
+
+Et maintenant on affiche seulement une seule ligne qui représente le temps total dépensé a récupérer des grains de sables :
+```
+get user input took: 208ns
+	sorting: 23.458µs
+		getting the sand grains: 78.035µs
+	everything else: 89.314083ms
+updating the world took: 89.339583ms
+displaying the world: 1.140541ms
+refreshing the screen took: 298.625µs
+displayed 3357 elements
+```
+
+Ça ne semble pas être le problème.
+On va rajouter des prints en suivant cette technique pour identifier le problème :
+
+À ce moment là on est sur un bout de code que je ne t’ai pas donné donc tu vas devoir vraiment rajouter des prints un peu partout jusqu’à identifier la vraie cause de ton problème.
+
+Mais il y a de bonne chances qu’on ait le même problème.
+Dans mon code a un endroit je regarde si un grain de sable est présent a la position où je veux aller, j’ai rajouté des prints comme on a dit autour de cet endroit là :
+```rust
+                let now = Instant::now();
+                // dès qu’on trouve une position libre on s’arrête
+                if self.world.iter().all(|s| (sand.x, sand.y) != (s.x, s.y)) {
+                    self.world[index] = sand;
+                    sand_exists += now.elapsed();
+                    break;
+                }
+                sand_exists += now.elapsed();
+```
+
+Et ça m’as permis d’identifié l’endroit qui occupe presque tout mon temps :
+```
+get user input took: 250ns
+	sorting: 35.875µs
+		getting the sand grains: 119.587µs
+		does the sand already exists: 223.073668ms
+	everything else: 225.692875ms
+updating the world took: 225.730583ms
+displaying the world: 1.079375ms
+refreshing the screen took: 3.285875ms
+displayed 5318 elements
+```
+
+On voit que sur toute la boucle, `223ms` / `225ms` sont perdue a regarder si un grain de sable occupe déjà la position qui m’intéresse.
+
+-----
+
+C’est assez logique puisque ce code là :
+```rust
+                if self.world.iter().all(|s| (sand.x, sand.y) != (s.x, s.y)) {
+```
+
+Peut possiblement itérer sur *TOUS* les grains de sables existant.
+Et celà pour *CHAQUE* grain de sable qu’on est entrain de mettre à jour.
+
+C’est ce qu’on appelle un algorithme en `O(n²)` où `n` représente le nombre total de grain de sable.
+Donc au plus on ajoute de grain de sable et au plus on doit faire de vérification **de manière exponentielle**.
+
+> La notation `O(...)` indique qu’on mesure la complexité d’un algorithme et qu’on va donner plus ou moins la manière dont le temps d’exécution va varier et en fonction de quoi
+
+![](assets/exponential_notation.png)
+
+Si on trace le graph de `n²` on se rends compte que le temps d’exécution **explose** littéralement avec le nombre de grain de sable qui augmentent.
+
+Comme indiqué par la couleur du graph, c’est de la merde.
+
+---
+
+Notre but maintenant ça va être de faire chuter cette complexité.
+Il y a plusieurs manière de faire.
+Si tu veux lire quelque chose de bien écrit, mon chercheur préféré a écrit un article que je trouve très réaliste a ce propos : <https://tratt.net/laurie/blog/2023/four_kinds_of_optimisation.html>
+
+Mais pour résumer voilà les 4 types d’optimisations possibles dans l’ordre de la plus simple a la plus complexe :
+- Utiliser un meilleur algorithme
+- Utiliser une meilleure structure de donnée
+- Écrire du code plus bas niveau / proche de la machine
+- Accepter une solution moins précise (par exemple ne regarder que quelques grains de sable au lieu de tous les regarder)
+
+Dans notre algorithme, on est donc en `O(n * n)` avec:
+1. Le premier `n` qui représente le parcours de TOUS les grains de sable pour les mettres à jour
+2. Le second `n` qui représente le parcours de TOUS les grains de sable pour savoir si une place est libre
+
+#### Simplifier le premier `n`
+
+```rust
+        for index in 0..self.world.len() {
+```
+
+Je ne vois pas beaucoup de manière de simplifier le premier `n`, il est nécessaire de mettre à jour tous les grains de sable pour les voir bouger.
+Mais si on prends un peu de recul sur le problème est-ce qu’on veut _vraiment_ mettre à jour **tous** les grains de sable ?
+En réalité on sait que lorsqu’un grain de sable touche le sol, il ne sera plus jamais mis à jour.
+Une idée pour réduire de beaucoup le premier `n` pourrait être de faire un vecteur avec les grains de sable qui ne seront plus jamais mis à jour et un autre vecteur avec les grains de sable qui doivent être mis à jour.
+
+Cependant, même avec cette approche le second `n` reste inchangé, on doit toujours regarder dans les deux vecteurs pour savoir si une place est libre.
+J’ai décidé de ne pas poursuivre cette approche parce que j’arrive a faire ramer la simulation avant même qu’un seul grain de sable atteigne le sol.
+
+
+/!\ Si a ce moment là tu penses à une autre solution je suis très intéressé de l’entendre. J’en ai une seconde qui serait vraiment efficace mais trop compliqué a implémenter pour le moment.
+
+
+#### Simplifier le second `n`
+
+```rust
+                if self.world.iter().all(|s| (sand.x, sand.y) != (s.x, s.y)) {
+```
+
+Je vois beaucoup plus de manière de travailler autour du second `n`.
+
+##### En changeant l’algorithme
+
+En changement uniquement l’algorithme on pourrait par exemple utiliser le fait que la liste de grain de sable est déjà triée sur les `y` pour aller chercher directement le `y` qui nous intéresse sans parcourir tous les grains de sable.
+On peut utiliser une technique qui s’appelle la « dichotomie » ou la « binary search » en anglais qui consiste a chercher de la même manière qu’on chercherais un mot dans un dictionnaire :
+1. J’ouvre le dictionnaire au centre et je regarde si le mot que je cherche est a droite ou a gauche
+2. J’ouvre les pages restante au centre et je regarde encore une fois si je dois aller dans la partie gauche ou droite
+3. Et ainsi de suite jusqu’à ce que je trouve le bon mot
+
+C’est par exemple la technique qu’on utilise pour gagner au jeu où il faut deviner un nombre entre `0` et `100`.
+Si le nombre est `72` par exemple alors on va demander les valeurs dans cet ordre :
+1. `50` - la moitié de la range `0-100`
+2. `75` - la moitié de la range `50-100`
+3. `62` - la moitié de la range `50-75`
+4. `68` - la moitié de la range `62-75`
+5. `71` - la moitié de la range `68-75`
+6. `73` - la moitié de la range `71-75`
+7. `72` - la moitié de la range `71-73`
+
+Cet exemple représente le **pire** cas possible.
+Souvent on croise le nombre pendant qu’on fait la recherche avant que la range ne contienne plus qu’un seul élément.
+
+Ce qui est important d’observer avec cet exemple c’est qu’entre chaque itération on **divise par deux** la quantité de valeur a tester.
+D’une certaine manière on fait l’inverse d’une puissance de 2 :
+Au lieu de faire `n * 2 * 2 * 2 * 2` pour `n⁴` on fait `n / 2 / 2 / 2 / 2`.
+C’est ce qu’on appelle un logarithme en base 2.
+L’inverse de la puissance de 2.
+
+Et on peut le vérifier assez facilement : [`log2(100) = 6.6`](https://numbat.dev/?q=log2%28100%29%E2%8F%8E)
+Nous étions dans le pire cas possible et on a bien eu besoin de regarder `6` valeurs avant de trouver la bonne.
+
+-----
+
+Si on utilisait cette technique notre code pour chercher le grain de sable qui nous intéresse alors on pourrait faire passer notre complexité de :
+`O(n * n)` à `O(n * log2(n))`. C’est bien mieux mais ça monte toujours assez vite :
+![](assets/n_log2_n.png)
+
+C’est toujours un peu compliqué de se rendre compte a quel point une courbe monte vite en fonction du niveau de zoom et d’autre choses.
+J’ai dessiné les deux sur le même graph et la différence n’est toujours pas flagrante :
+
+![](assets/n_n_vs_n_log2_n_zoomed.png)
+
+Mais si l’on dézoome beaucoup. Par exemple jusqu’à ce que l’une des deux courbes atteigne `20_000` grains de sable ce qui semble être une valeur raisonnable alors voilà ce que ça donne :
+
+![](assets/n_n_vs_n_log2_n_dezoomed.png)
+
+On se rends compte que l’algorithme en `O(n²)` n’as presque pas bougé et ne vas jamais attendre les `20_000`.
+Même si le `O(n * log2(n))` semble toujours augmenter très vite il est infiniement meilleur que notre premier algorithme.
+
+----
+
+
+Pour savoir si cette optimisation est suffisante pour nous j’ai essayé de trouver le temps que prenais une comparaison a s’exécuter environ dans notre cas.
+J’ai ajouté un print dans le code et je me suis rendu compte que quand j’avais environ `20_000` grains de sable cette boucle prenait environ `120ms` à s’exécuter.
+À partir de ces deux valeurs une simple division nous donne l’information qu’on veut : [`120ms / 20_000² -> ns = 0.3ns`](https://numbat.dev/?q=120ms+%2F+20_000%C2%B2+-%3E+ns%E2%8F%8E)
+Une comparaison prends environ `0.3ns`.
+
+Ça nous donne une base pour travailler.
+
+Nous on voudrait que notre logiciel soit capable de supporter le fait que la moitié de l’écran soit rempli de grain de sable.
+Étant donné que notre résolution est du `640 * 360`, la moitié de cette valeur nous donne `115_200` :
+Notre code explose alors qu’on est même pas a un cinquième de ce qu’on aimerait supporter !!!
+
+Maintenant qu’on connait le temps d’exécution d’une compairaison on peut d’ailleur mesurer combien de temps l’algorithme actuel prendrait a gérer autant de points :
+[`115_200 * 115_200 * 0.3ns -> s = 3.9s`](https://numbat.dev/?q=115_200+*+115_200+*+0.3ns+-%3E+s%E2%8F%8E)
+
+C’est complètement impossible de laisser ça comme ça. 
+Avec notre nouvel algorithme qui utilise la dichotomie en `O(n * log2(n))` ça nous donnerait : [`115_200 * log2(115_200) * 0.3ns -> ms = 0.5ms`](https://numbat.dev/?q=115_200+*+log2%28115_200%29+*+0.3ns+-%3E+s%E2%8F%8E115_200+*+log2%28115_200%29+*+0.3ns+-%3E+ms%E2%8F%8E)
+Un temps complètement raisonnable.
+
+
+Avec une résolution d’écran beaucoup plus grande comme celle de l’écran de mon mac par exemple : `3456 × 2234`.
+La moitié de l’écran représente `3_860_352` grains de sable et prendrait un total de [`3_860_352 * log2(3_860_352) * 0.3ns -> ms = 25.3ms`](https://numbat.dev/?q=115_200+*+log2%28115_200%29+*+0.3ns+-%3E+s%E2%8F%8E115_200+*+log2%28115_200%29+*+0.3ns+-%3E+ms%E2%8F%8E3456+%C3%97+2234%E2%8F%8E3456+%C3%97+2234+%2F+2%E2%8F%8E3_860_352+*+log2%283_860_352%29+*+0.3ns%E2%8F%8E3_860_352+*+log2%283_860_352%29+*+0.3ns+-%3E+ms%E2%8F%8E).
+
+Un peu trop long mais on va partir sur ça puisque c’est notre première idée et qu’elle est simple a implémenter.
+
+#### Implémentation
+
+En rust l’algorithme de dichotomie est déjà présent dans la librairie standard, on ne vas pas avoir besoin de le coder.
+Il se trouve sur les slice sous le nom de [`binary_search`](https://doc.rust-lang.org/stable/std/primitive.slice.html#method.binary_search).
+
+Pour pouvoir chercher dans tous les éléments ceci dit, on va avoir besoin que notre tableau de grain de sable soit _complètement_ trié.
+Et pas uniquement les `y`.
+Parce que sinon une fois qu’on trouve l’endroit dans le tableau ou un `y` nous intéresse la dichotomie ne saura plus si elle doit aller a gauche ou a droite pour trouver le `x` correspondant :
+
+```
+[{ y: 0, x: 1000 }, { y: 0, x: 543 }, { y: 0, x: 0 }]
+```
+
+En ne triant que sur les `y` on peut se retrouver avec ce tableau genre de tableau.
+Et imaginons qu’on cherche a savoir si le grain de sable `{ y: 0, x: 5 }` existe, une fois que la dichotomie arrive au centre elle n’as aucune information sur s’il faut aller a gauche ou a droite pour trouver un `x` plus petit ou plus grand.
+
+On va donc devoir modifier cette ligne au début de notre fonction pour y inclure la gestion du `x` :
+```rust
+        self.world.sort_unstable_by_key(|sand| Reverse(sand.y));
+```
+
+On va abandonner notre méthode `sort_unstable_by_key` pour une méthode plus bas niveau : [`sort_unstable_by`](https://doc.rust-lang.org/stable/std/primitive.slice.html#method.sort_unstable_by).
+Celle ci nous permet de complètement maitriser la manière dont on compare deux éléments plutôt que de simplement renvoyer un objet et laisser rust faire la comparaison.
+Elle nous passe en paramètre deux objets et on renvoie si celui de gauche est plus grand, plus petit ou égal a celui de droite.
+
+```rust
+        self.world.sort_unstable_by(|left, right| {
+            left.y.cmp(&right.y).reverse().then(left.x.cmp(&right.x))
+        });
+```
+
+Rust nous permet de comparer des éléments s’ils implémentent le trait [`Ord`](https://doc.rust-lang.org/stable/std/cmp/trait.Ord.html).
+Et la plupart des types de base de rust dont tous les nombres entiers implémentent ce trait.
+1. Comme avant, on commence par comparer les `y` et on les inverses pour avoir les éléments du bas en premier : `left.y.cmp(&right.y).reverse()`
+2. *Puis*, SI les `y` étaient identique, alors on compare les `x` : `.then(left.x.cmp(&right.x))`
+
+Ensuite on peut supprimer notre boucle pour utiliser la dichotomie, une fois encore on doit utiliser le `by` avec les même arguments pour comparer deux grains de sables :
+```rust
+                if self
+                    .world
+                    .binary_search_by(|s| s.y.cmp(&sand.y).reverse().then(s.x.cmp(&sand.x)))
+                    .is_err()
+```
+
+Cette fois ci la closure ne prends qu’un seul paramètre puisque c’est nous qui spécifiont le grain de sable qu’on observe.
+Ici chez moi il s’appelait `sand`.
+
+#### Implémenter `Ord` soit même
+
+Ici on a répété du code très important, si le `sort` du début devait un jour se retrouver désynchroniser avec la `binary_search` plus bas on aurait des erreurs très dure a déboguer.
+Une manière simple de régler ce problème est d’implémenter nous même le trait `Ord` sur notre type puis d’utiliser les fonctions de trie et de dichotomie normale sans aucun paramètre :
+
+```rust
+// Rust nous demande d’implémenter `PartialOrd` pour avoir le droit d’implémenter `Ord`
+impl PartialOrd for Sand {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Sand {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.y.cmp(&other.y).reverse().then(self.x.cmp(&other.x))
+    }
+}
+```
+
+Une fois implémenté on peut tout simplement retirer nos `_by` dans le reste du code :
+```diff
+-        self.world.sort_unstable_by(|left, right| {
+-            left.y.cmp(&right.y).reverse().then(left.x.cmp(&right.x))
+-        });
++        self.world.sort_unstable();
+```
+
+Puis :
+```diff
+-                if self
+-                    .world
+-                    .binary_search(|s| s.y.cmp(&sand.y).reverse().then(s.x.cmp(&sand.x)))
+-                    .is_err()
++                if self.world.binary_search(&sand).is_err() {
+```
+
