@@ -1686,3 +1686,272 @@ Et tadaaa
 
 ![](assets/interaction.gif)
 
+## 8) Rendre tout un peu plus réactif
+
+Malgré tous nos efforts on se fait toujours un peu chier dans cette simulation de grain de sable.
+Peut être que c’est parce que c’est foncièrement pas très rigolo mais je pense
+que mon premier problème c’est qu’il n’y a pas assez de grain de sable qui tombe
+quand on clique quelque part donc ici on va voir comment on pourrait créer plusieurs grains de sables à chaque fois qu’on clique quelque part.
+
+Une première version du code pourrait ressembler a ça :
+```rust
+    pub fn handle_user_input(&mut self, window: &Window) {
+        if let Some((x, y)) = window.get_mouse_pos(MouseMode::Discard) {
+            if window.get_mouse_down(MouseButton::Left) {
+                let (x, y) = (x as usize, y as usize);
+                let thickness = 2;
+                // Ici on si la personne clique sur les coordonnés (10, 10) on va se balader sur les indexes
+                // [
+                //  (8, 8),  (9, 8),  (10, 8),  (11, 8),  (12, 8),
+                //  (8, 9),  (9, 9),  (10, 9),  (11, 9),  (12, 9),
+                //  (8, 10), (9, 10), (10, 10), (11, 10), (12, 10),
+                //  (8, 11), (9, 11), (10, 11), (11, 11), (12, 11),
+                //  (8, 12), (9, 12), (10, 12), (11, 12), (12, 12),
+                // ]
+                // Ce qui correspond a un carré autour du coordonné (10, 10).
+                // Ça nous permet aussi de facilement régler l’épaisseur du trait si l’on veut le rendre configurable plus tard.
+                for x in (x - thickness)..(x + thickness) {
+                    for y in (y - thickness)..(y + thickness) {
+                        self.world.push(Sand { x, y });
+                    }
+                }
+            }
+        }
+    }
+```
+
+Mais quand je vais trop sur les bords de l’écran j’ai encore des crashs.
+À toi de corriger ce code et d’ajouter les conditions nécessaires pour que ça arrête de crasher.
+
+### Pourquoi ça rame
+
+Tu as du te rendre compte en testant qu’assez rapidement le code se mets a ramer.
+Si tu ne le fais pas déjà, n’oublie pas que tu peux lancer ton programme en mode release avec la commande :
+```
+cargo run --release
+```
+Cette « solution » repousse le problème mais ne le fait pas disparaitre.
+
+----
+
+Les problèmes de performances sont souvent les plus dur a résoudre pour plusieurs raisons :
+- Ils peuvent nécessiter de modifier du code déjà complexe pour retirer  des opérations
+- Ça prends beaucoup du temps de s’assurer que le code est bien devenu rapide dans *tous les cas* et pas seulement dans le cas qu’on a regardé
+- C’est très dur de comprendre **quoi** optimiser
+
+Comme rendre du code plus rapide prends du temps on ne peut pas **tout** rendre plus rapide.
+C’est pourquoi la chose la plus important quand on réalise qu’il y a un problème de performance c’est d’en trouver la source !
+
+Une méthode vraiment simpliste mais très chiante pour localiser les problèmes de performances c’est de simplement mesurer a la main le temps qu’on perds dans chaque partie du code.
+Par exemple on peut commencer au niveau le plus haut, directement dans la boucle de jeu et regarder laquelle de nos 4 étape prends le plus de temps.
+En rust on peut utiliser le type [`Instant`](https://doc.rust-lang.org/stable/std/time/struct.Instant.html) pour représenter un moment dans le temps.
+Puis on peut demander combien de temps s’est écoulé depuis qu’on a créé ce type.
+Voilà a quoi ressemble notre boucle de jeu si l’on affiche le temps passé dans chaque partie :
+
+```rust
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        let now = Instant::now();
+        world.handle_user_input(&window);
+        println!("get user input took: {:?}", now.elapsed());
+
+        let now = Instant::now();
+        world.update(&buffer);
+        println!("updating the world took: {:?}", now.elapsed());
+
+        let now = Instant::now();
+        world.display(&mut buffer);
+        println!("displaying the world: {:?}", now.elapsed());
+
+        let now = Instant::now();
+        // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
+        window
+            .update_with_buffer(buffer.buffer(), buffer.width(), buffer.height())
+            .unwrap();
+        println!("refreshing the screen took: {:?}", now.elapsed());
+
+        println!();
+    }
+```
+
+Et maintenant lorsqu’on lance le code on voit ou est passé le temps :
+```
+get user input took: 167ns
+updating the world took: 0ns
+displaying the world: 107.834µs
+refreshing the screen took: 36.975375ms
+```
+
+De base on voit que tout vas très vite sauf la fonction qui rafraichit l’écran.
+La raison c’est qu’on a dit a `minifb` qu’on ne voulait pas plus de `60` images par secondes donc si on essaie de rafraichir l’écran trop vite il va attendre a notre place.
+Une fois que le code se mets a ramer on voit quelque chose de bien différent :
+```
+get user input took: 167ns
+updating the world took: 164.166834ms
+displaying the world: 29.75µs
+refreshing the screen took: 5.093458ms
+```
+
+/!\ Pour rappel, on a un budget d’environ `16ms` pour maintenir du 60 images par secondes.
+
+- Récupérer les interactions utilisateur est toujours plus ou moins instantané et ne pose aucun problème.
+- Mettre à jour le monde explose notre budget et prends 10 fois le temps nécessaire a l’affichage. Si c’était notre seule opération on n’afficherait que 6 images par secondes.
+- Afficher le monde est instantané aussi.
+- Mettre à jour l’écran prends 5ms, étant donné que nous étions en retard c’est probablement le temps minimum pour rafraichir l’écran pour `minifb`, et donc une durée incompressible pour nous.
+
+Ici on a de la chance, le problème est localisé a un seul endroit il semblerait.
+Il n’y que la mise à jour du monde qui prends du temps, tout le reste est plutôt rapide.
+
+-----
+
+```rust
+    pub fn update(&mut self, buffer: &WindowBuffer) {
+        // On parcours les `y` de bas en haut
+        for y in (0..buffer.height()).rev() {
+            for index in 0..self.world.len() {
+                let mut sand = self.world[index].clone();
+                // On ne mets à jour que les grains de sable qui sont sur la ligne observée
+                if sand.y != y {
+                    continue;
+                }
+                sand.y += 1;
+                if sand.y >= buffer.height() {
+                    continue;
+                }
+
+                // ...
+            }
+        }
+    }
+```
+
+Voilà le code sur lequel on s’était arrêté.
+Ce qu’il se passe c’est que pour chaque ligne dans notre fenêtre, donc 360 fois (notre fenêtre fait 640x360 pixels), on regarde *TOUS* les grains de sables.
+Si l’on pouvait simplement retirer cette première boucle `for` on rendrait donc notre code 360 fois plus rapide ce qui serait suffisant pour revenir à 60 images par seconde dans l’exemple que j’ai mesuré.
+
+À ce moment là il faut bien se souvenir pourquoi nous avions besoin de cette boucle :
+On s’était rendu compte que si on ne mettait pas à jour les grains de sable du bas vers le haut alor certains risquaient de ne pas bouger parce qu’ils avaient un autre grains en dessous d’eux : 
+```rust
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        ..#..
+        ..#..
+        ..#..
+        .....
+        "###
+        );
+        world.update(&buffer);
+        world.display(&mut buffer);
+        assert_display_snapshot!(
+            buffer.to_string(),
+            @r###"
+        ..#..
+        ..#..
+        .....
+        ..#..
+        "###
+        );
+```
+
+### Trier les éléments en fonction de leurs hauteur
+
+Il y a probablement plein de solution a ce problème, moi j’ai choisi de simplement trier les éléments en fonction de leurs `y` quand on commence a mettre à jour le monde :
+```rust
+        self.world.sort_unstable_by_key(|sand| Reverse(sand.y));
+
+        for index in 0..self.world.len() {
+            let mut sand = self.world[index].clone();
+            // On ne mets à jour que les grains de sable qui sont sur la ligne observée
+            sand.y += 1;
+            if sand.y >= buffer.height() {
+                continue;
+            }
+```
+
+- [`sort_unstable_by_key`](https://doc.rust-lang.org/stable/std/primitive.slice.html#method.sort_unstable_by_key) - Cette fonction permet de trier des éléments mais en spécifiant sur quoi `rust` doit se baser pour trier. Ici on lui indique qu’on veut qu’il utilise `Reverse(sand.y)`
+- [`Reverse`](https://doc.rust-lang.org/stable/std/cmp/struct.Reverse.html) - Une structure qui inverse l’ordre de ce qu’on lui donne en paramètre. Pour rust `Reverse(5) < Reverse(10)`.
+
+Question : Pourquoi est-ce qu’il y a des méthodes `sort_unstable_*` et des méthodes `sort_*`, que veut dire le `unstable` et à quoi il sert ?
+
+----
+
+Maintenant le code va beaucoup plus vite et on arrive a afficher beaucoup plus d’éléments très vite.
+Mais on se rends compte que le code se mets a ramer encore plus vite puisqu’on est super rapide a rajouter les éléments.
+
+On va donc *encore* ajouter des prints pour voir ou est-ce qu’on perds notre temps.
+Pour faire simple j’en ai mis un autour du sort et un autour du reste avec toute la boucle :
+```rust
+        let now = Instant::now();
+        self.world.sort_unstable_by_key(|sand| Reverse(sand.y));
+        println!("\tsorting: {:?}", now.elapsed());
+
+        let now = Instant::now();
+        for index in 0..self.world.len() {
+            let mut sand = self.world[index].clone();
+            // ...
+        }
+        println!("\teverything else: {:?}", now.elapsed());
+```
+
+Le `\t` est une indentation, c’est juste pour marquer que ces lignes là sont reliée a celle qui va suivre.
+Voilà le résultat quand j’attends que ça rame :
+```
+get user input took: 125ns
+	sorting: 80.792µs
+	everything else: 249.679542ms
+updating the world took: 249.772417ms
+displaying the world: 37.292µs
+refreshing the screen took: 367.542µs
+```
+
+Le problème vient encore de la boucle. Le tri est plutôt rapide.
+
+### Supprimer les duplicats
+
+Une autre chose qui pourrait ralentir notre code c’est le fait que quand on
+passe avec la souris, on passe souvent deux fois au même endroit ce qui génère
+des grains de sables exactement identique mais qui doivent être mis à jour deux
+fois.
+
+Je ne sais pas a quel point ça prends du temps mais je sais que ça consomme de
+la mémoire et que ça ralentit le code donc je vais corriger ça maintenant.
+
+Lorsque l’on insère des éléments on va maintenant vérifier que toutes les positions qu’on utilises ne sont pas déjà utilisée :
+```rust
+                for x in (x - thickness)..(x + thickness) {
+                    for y in (y - thickness)..(y + thickness) {
+                        let sand = Sand { x, y };
+                        // On ne veut insérer le grain de sable QUE s’il n’est pas déjà présent
+                        if !self.world.contains(&sand) {
+                            self.world.push(sand);
+                        }
+                    }
+                }
+```
+
+Rust se plaint qu’on ne peut pas comparer le type qui représente les grains de sable.
+Comme le type ne contient que les coordonnés alors on peut simplement dériver `PartialEq` et `Eq` comme rust le demande :
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sand {
+    x: usize,
+    y: usize,
+}
+```
+
+Avec cette optimisation le code devient encore plus rapide mais j’arrive toujours a le faire ramer assez facilement.
+
+```
+get user input took: 125ns
+	sorting: 52.875µs
+	everything else: 110.765167ms
+updating the world took: 110.825ms
+displaying the world: 26.667µs
+refreshing the screen took: 3.083125ms
+```
+
+Et la fonction de gestion des entrées utilisateur n’as pas spécialement ralenti.
+En tout cas pas au point de devenir problématique.
+
+### Mesurer les problèmes de performances dans une boucle
