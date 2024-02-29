@@ -1074,7 +1074,8 @@ stack backtrace:
              at ./src/main.rs:31:9
    5: core::ops::function::FnOnce::call_once
              at /rustc/82e1608dfa6e0b5569232559e3d385fea5a93112/library/core/src/ops/function.rs:250:5
-note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.```
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+```
 
 La première chose quand on observe ce genre de problème c’est d’écrire des tests qui nous permette de les reproduire comme ça quoi qu’il arrive :
 - On oublie pas ce comportement, bien ou mauvais
